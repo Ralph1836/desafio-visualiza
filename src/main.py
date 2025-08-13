@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 import os
 import httpx
-import certifi
 
 # Load environment variables
 load_dotenv()
@@ -27,7 +26,7 @@ async def get_apod():
 
     params = {"api_key": NASA_API_KEY}
     try:
-        async with httpx.AsyncClient(verify=certifi.where(), timeout=10.0) as client:
+        async with httpx.AsyncClient() as client:
             response = await client.get(APOD_URL, params=params)
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail=response.text)

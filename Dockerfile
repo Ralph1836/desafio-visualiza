@@ -1,47 +1,42 @@
-########## Builder ##########
-FROM python:3.9-slim-bullseye AS builder
+########## base with uv ##########
+FROM python:3.11-slim-bookworm AS base
 WORKDIR /app
-
-# Env for smaller, cleaner images
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Create a self-contained virtualenv
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# install uv (single static binary)
+RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && /root/.local/bin/uv --version
 
-# Copy only requirements first (better cache)
-COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+ENV PATH="/root/.local/bin:${PATH}"
 
-########## Runtime ##########
-FROM python:3.9-slim-bullseye
+########## builder: resolve & sync deps ##########
+FROM base AS builder
+# copy only dependency manifests first for better layer caching
+COPY pyproject.toml ./
+# include lock file if it exists (recommended)
+COPY uv.lock ./
+# create in-project venv and install (no dev dependencies for runtime)
+RUN uv venv && uv sync --frozen --no-dev
+
+########## runtime ##########
+FROM python:3.11-slim-bookworm AS runtime
 WORKDIR /app
-
-# Same env in runtime
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/app/.venv/bin:${PATH}"
 
-# Copy the venv from builder
-COPY --from=builder /opt/venv /opt/venv
-
-# Copy only app code (never copy .env)
+# copy the resolved venv and app src
+COPY --from=builder /app/.venv /app/.venv
 COPY src ./src
 
-# Security: run as non-root
+# run as non-root
 RUN useradd -m -u 10001 appuser
 USER appuser
 
 EXPOSE 8000
 
-# Fixed executable; default args are overridable
-ENTRYPOINT ["/opt/venv/bin/uvicorn", "src.main:app"]
+ENTRYPOINT ["uvicorn", "src.main:app"]
 CMD ["--host", "0.0.0.0", "--port", "8000"]
-
-# (Optional) Simple container-level healthcheck (adjust path/timeout if you like)
-# HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-#   CMD wget -qO- http://127.0.0.1:8000/health || exit 1
